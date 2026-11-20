@@ -79,7 +79,15 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
   const view = (o) => ({ id: o.id, state: o.state, kes: o.kes, sats: o.sats, rate: Math.round(o.btcKes), invoice: o.state === "INVOICED" ? o.invoice : undefined, receipt: o.receipt || null });
 
   // ---- the loop: watch invoices, pay, chase silent payouts
+  // One tick at a time. setInterval doesn't wait for an async tick, so a slow
+  // LND lookup would let two ticks both see ACCEPTED and both send M-Pesa.
+  let ticking = false;
   async function tick() {
+    if (ticking) return;
+    ticking = true;
+    try { await tickOnce(); } finally { ticking = false; }
+  }
+  async function tickOnce() {
     for (const o of orders.values()) {
       try {
         if (o.state === "INVOICED") {

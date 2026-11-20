@@ -14,6 +14,7 @@ export function mockDaraja({ port, key, secret, initiator, password, privateKeyP
   const tokens = new Set();
   const paid = new Map(); // OriginatorConversationID -> receipt
   let balance = utility;
+  let payRequests = 0;
 
   const callback = (url, body) => setTimeout(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {}), delayMs);
   const receipt = () => "T" + crypto.randomBytes(5).toString("hex").toUpperCase().slice(0, 9);
@@ -33,6 +34,7 @@ export function mockDaraja({ port, key, secret, initiator, password, privateKeyP
     const ack = { ConversationID: conv(), OriginatorConversationID: b.OriginatorConversationID, ResponseCode: "0", ResponseDescription: "Accept the service request successfully." };
 
     if (u.pathname === "/mpesa/b2c/v3/paymentrequest") {
+      payRequests++;
       send(200, ack);
       const result = (code, desc, params) => ({ Result: { ResultType: 0, ResultCode: code, ResultDesc: desc, OriginatorConversationID: b.OriginatorConversationID, ConversationID: ack.ConversationID, TransactionID: params?.receipt || receipt(),
         ...(params ? { ResultParameters: { ResultParameter: [
@@ -60,5 +62,5 @@ export function mockDaraja({ port, key, secret, initiator, password, privateKeyP
     send(404, { errorMessage: "not found" });
   });
   server.listen(port, "127.0.0.1");
-  return { server, balance: () => balance };
+  return { server, balance: () => balance, payRequests: () => payRequests };
 }

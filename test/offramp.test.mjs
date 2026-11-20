@@ -117,6 +117,18 @@ test("crash while paying: a restart asks M-Pesa instead of paying twice", async 
   again.server.close();
 });
 
+test("overlapping ticks with a slow LND pay M-Pesa once", async () => {
+  const { off, lnd, mock } = await setup();
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 700 })).id);
+  lnd.pay(o.hashHex);
+  const fast = lnd.lookup;
+  lnd.lookup = async (h) => { await new Promise((r) => setTimeout(r, 100)); return fast(h); };
+  await Promise.all([off.tick(), off.tick(), off.tick()]); // what setInterval does when a tick runs long
+  await until(() => o.state === "PAID");
+  assert.equal(mock.payRequests(), 1); // one request sent, not one per tick
+  assert.equal(mock.balance(), 20_000 - 700);
+});
+
 test("status answers are read from inside ResultParameters", () => {
   const r = parseResult({ Result: { ResultCode: 0, OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
     { Key: "OriginatorConversationID", Value: "the-payout" }, { Key: "TransactionStatus", Value: "Completed" }, { Key: "ReceiptNo", Value: "R1" } ] } } });

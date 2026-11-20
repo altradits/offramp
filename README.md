@@ -34,7 +34,7 @@ customer wallet          off-ramp (this code)              LND             M-Pes
 npm test
 ```
 
-Nine tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, and a crash in the middle of a payout that must not pay twice.
+Ten tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, overlapping ticks that must send one payout, and a crash in the middle of a payout that must not pay twice.
 
 ## Run the full lab (real Lightning, private network)
 
