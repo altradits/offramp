@@ -1,0 +1,9 @@
+{
+  "name": "offramp",
+  "version": "0.1.0",
+  "description": "A Lightning to mobile money off-ramp you can run yourself: hold invoices + M-Pesa B2C.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

@@ -1,0 +1,9 @@
+journal.jsonl
+keys/
+btc/
+svc/
+wallet/
+bin/
+*.log
+*.pid
+.env
