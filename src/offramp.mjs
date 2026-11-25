@@ -5,6 +5,7 @@
 //   3. we pay KES by M-Pesa B2C  -> Safaricom calls back with a result
 //   4. result OK   -> settle the invoice (we receive the sats), show the M-Pesa receipt
 //      result FAIL -> cancel the invoice (the customer's sats go back to them)
+//      paid but LND already cancelled -> NEEDS_REVIEW, the operator must look
 //
 // The customer is never charged for a payout that didn't happen, and we never
 // pay out without the sats already locked in the channel.
@@ -76,7 +77,7 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
     return view(o);
   }
 
-  const view = (o) => ({ id: o.id, state: o.state, kes: o.kes, sats: o.sats, rate: Math.round(o.btcKes), invoice: o.state === "INVOICED" ? o.invoice : undefined, receipt: o.receipt || null });
+  const view = (o) => ({ id: o.id, state: o.state, kes: o.kes, sats: o.sats, rate: Math.round(o.btcKes), invoice: o.state === "INVOICED" ? o.invoice : undefined, receipt: o.receipt || null, why: o.state === "NEEDS_REVIEW" ? o.why : undefined });
 
   // ---- the loop: watch invoices, pay, chase silent payouts
   // One tick at a time. setInterval doesn't wait for an async tick, so a slow
@@ -125,7 +126,15 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
     if (!o || !["PAYING", "LOCKED"].includes(o.state)) return; // unknown or already final: ignore repeats
     if (r.utilityFunds !== undefined) saveFloat(Number(r.utilityFunds));
     if (r.ok) {
-      await lnd.settle(o.preimageHex);
+      try {
+        await lnd.settle(o.preimageHex);
+      } catch (e) {
+        // The shillings left but the sats can't be claimed (LND cancelled the
+        // invoice first): park the order where the operator can see it.
+        if (r.utilityFunds === undefined) saveFloat(float - o.kes);
+        save(o, { state: "NEEDS_REVIEW", receipt: r.receipt, why: `M-Pesa paid but LND settle failed: ${e.message}` });
+        return;
+      }
       save(o, { state: "PAID", receipt: r.receipt });
       if (r.utilityFunds === undefined) saveFloat(float - o.kes);
     } else if (r.final) {

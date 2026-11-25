@@ -25,7 +25,7 @@ customer wallet          off-ramp (this code)              LND             M-Pes
 - `src/rate.mjs`: BTC/KES as the median of three exchanges times the median of two FX feeds. Refuses to quote if sources are missing or disagree by more than 2%.
 - `src/lnd.mjs`: hold invoices over LND REST, with the **invoice macaroon** only (it cannot send money).
 - `src/daraja.mjs`: M-Pesa B2C payout, transaction status query, and a parser for both result shapes.
-- `src/offramp.mjs`: the state machine `INVOICED -> LOCKED -> PAYING -> PAID | REFUNDED | EXPIRED`, written to an append-only journal before every action, plus float and limit checks.
+- `src/offramp.mjs`: the state machine `INVOICED -> LOCKED -> PAYING -> PAID | REFUNDED | EXPIRED`, plus `NEEDS_REVIEW` when M-Pesa paid but the sats can't be claimed (LND cancelled first), written to an append-only journal before every action, plus float and limit checks.
 - `src/mock-daraja.mjs`: a local stand-in for Daraja built from Safaricom's documented request and callback shapes. It verifies the OAuth token and decrypts the RSA-encrypted initiator password like the real API. **Never** point production at it.
 
 ## Run the tests (no node needed)
@@ -34,7 +34,7 @@ customer wallet          off-ramp (this code)              LND             M-Pes
 npm test
 ```
 
-Ten tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, overlapping ticks that must send one payout, and a crash in the middle of a payout that must not pay twice.
+Eleven tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, overlapping ticks that must send one payout, a crash in the middle of a payout that must not pay twice, and a late M-Pesa success after LND cancelled that parks the order for review.
 
 ## Run the full lab (real Lightning, private network)
 

@@ -21,7 +21,7 @@ function fakeLnd() {
     inv,
     addHold: async ({ hashHex, sats }) => { inv.set(hashHex, { state: "OPEN", sats }); return { payment_request: "lnbcrt" + hashHex.slice(0, 10) }; },
     lookup: async (h) => inv.get(h),
-    settle: async (pre) => { const h = crypto.createHash("sha256").update(Buffer.from(pre, "hex")).digest("hex"); inv.get(h).state = "SETTLED"; },
+    settle: async (pre) => { const h = crypto.createHash("sha256").update(Buffer.from(pre, "hex")).digest("hex"); const i = inv.get(h); if (i.state === "CANCELED") throw new Error("LND 400: invoice canceled"); i.state = "SETTLED"; },
     cancel: async (h) => { inv.get(h).state = "CANCELED"; },
     pay: (h) => { inv.get(h).state = "ACCEPTED"; }, // the customer's wallet pays
   };
@@ -127,6 +127,27 @@ test("overlapping ticks with a slow LND pay M-Pesa once", async () => {
   await until(() => o.state === "PAID");
   assert.equal(mock.payRequests(), 1); // one request sent, not one per tick
   assert.equal(mock.balance(), 20_000 - 700);
+});
+
+test("late success after LND cancel: order needs review instead of stuck PAYING", async () => {
+  const { off, lnd, cb } = await setup({ mode: "silent" }); // M-Pesa pays but its callback is delayed
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  assert.equal(o.state, "PAYING");
+  await lnd.cancel(o.hashHex); // LND cancels the hold invoice (expiry) before the M-Pesa result arrives
+  await off.onResult({ Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: o.id, TransactionID: "T123456789",
+    ResultParameters: { ResultParameter: [
+      { Key: "TransactionAmount", Value: 1500 }, { Key: "TransactionReceipt", Value: "T123456789" },
+      { Key: "B2CUtilityAccountAvailableFunds", Value: 18500 } ] } } });
+  assert.equal(o.state, "NEEDS_REVIEW");
+  assert.equal(o.receipt, "T123456789");
+  assert.match(o.why, /settle failed/);
+  assert.equal(lnd.inv.get(o.hashHex).state, "CANCELED"); // sats were never claimed
+  const v = await (await fetch(`http://127.0.0.1:${cb}/order/${o.id}`)).json(); // the operator sees it
+  assert.equal(v.state, "NEEDS_REVIEW");
+  assert.equal(v.receipt, "T123456789");
+  assert.match(v.why, /settle failed/);
 });
 
 test("status answers are read from inside ResultParameters", () => {
