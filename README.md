@@ -34,7 +34,7 @@ customer wallet          off-ramp (this code)              LND             M-Pes
 npm test
 ```
 
-Thirteen tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, overlapping ticks that must send one payout, a crash in the middle of a payout that must not pay twice, a late M-Pesa success after LND cancelled that parks the order for review, an LND cancel while locked that expires without paying, and an LND cancel mid-payout that is recorded without a second payout.
+Sixteen tests: phone and amount validation, median pricing, rounding, a paid payout, a refused payout that refunds, float reservation, forged callbacks, overlapping ticks that must send one payout, a crash in the middle of a payout that must not pay twice, a late M-Pesa success after LND cancelled that parks the order for review, an LND cancel while locked that expires without paying, an LND cancel mid-payout that is recorded without a second payout, refunds that survive an already-cancelled invoice or a failed cancel, and repeated callbacks that stay idempotent.
 
 ## Run the full lab (real Lightning, private network)
 
