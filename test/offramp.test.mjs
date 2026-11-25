@@ -286,6 +286,17 @@ test("daily limit counts NEEDS_REVIEW outflows that moved shillings", async () =
   await off.quote({ phone: "0722345678", kes: 50_000 }); // so the limit ignores it
 });
 
+test("stale PAYING order still asks M-Pesa for status when LND is down", async () => {
+  const { off, lnd } = await setup({ mode: "silent", statusAfterMs: 50 });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  assert.equal(o.state, "PAYING");
+  lnd.lookup = async () => { throw new Error("LND down"); };
+  await new Promise((r) => setTimeout(r, 80)); // the payout goes stale
+  await off.tick();
+  assert.equal(o.asked, true); // the status query went out despite the failed lookup
+});
+
 test("status answers are read from inside ResultParameters", () => {
   const r = parseResult({ Result: { ResultCode: 0, OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
     { Key: "OriginatorConversationID", Value: "the-payout" }, { Key: "TransactionStatus", Value: "Completed" }, { Key: "ReceiptNo", Value: "R1" } ] } } });
