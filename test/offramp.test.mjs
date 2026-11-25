@@ -150,6 +150,40 @@ test("late success after LND cancel: order needs review instead of stuck PAYING"
   assert.match(v.why, /settle failed/);
 });
 
+test("LND cancel while LOCKED expires the order without touching M-Pesa", async () => {
+  const { off, lnd, mock } = await setup();
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex);
+  o.state = "LOCKED"; // a restart replayed the journal up to LOCKED (crash before PAYING)
+  await lnd.cancel(o.hashHex); // LND cancelled the invoice while we were down
+  await off.tick();
+  assert.equal(o.state, "EXPIRED");
+  assert.equal(mock.payRequests(), 0); // M-Pesa was never asked: nothing left the float
+});
+
+test("LND cancel while PAYING is recorded without a second payout", async () => {
+  const { off, lnd, mock, cb } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  assert.equal(o.state, "PAYING");
+  await lnd.cancel(o.hashHex); // LND cancels mid-payout
+  await off.tick();
+  assert.equal(o.state, "PAYING"); // still waiting for the M-Pesa truth
+  assert.equal(o.lndState, "CANCELED");
+  assert.equal(mock.payRequests(), 1);
+  const v = await (await fetch(`http://127.0.0.1:${cb}/order/${o.id}`)).json();
+  assert.equal(v.lndState, "CANCELED");
+  const stamped = o.updatedAt;
+  await off.tick(); // a further tick records nothing twice
+  assert.equal(o.updatedAt, stamped);
+  await off.onResult({ Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: o.id, TransactionID: "T123456789",
+    ResultParameters: { ResultParameter: [
+      { Key: "TransactionAmount", Value: 1500 }, { Key: "TransactionReceipt", Value: "T123456789" },
+      { Key: "B2CUtilityAccountAvailableFunds", Value: 18500 } ] } } });
+  assert.equal(o.state, "NEEDS_REVIEW"); // the late success resolves against the recorded cancel
+});
+
 test("status answers are read from inside ResultParameters", () => {
   const r = parseResult({ Result: { ResultCode: 0, OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
     { Key: "OriginatorConversationID", Value: "the-payout" }, { Key: "TransactionStatus", Value: "Completed" }, { Key: "ReceiptNo", Value: "R1" } ] } } });
