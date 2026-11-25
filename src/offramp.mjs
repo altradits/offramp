@@ -77,7 +77,7 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
     return view(o);
   }
 
-  const view = (o) => ({ id: o.id, state: o.state, kes: o.kes, sats: o.sats, rate: Math.round(o.btcKes), invoice: o.state === "INVOICED" ? o.invoice : undefined, receipt: o.receipt || null, why: o.state === "NEEDS_REVIEW" ? o.why : undefined });
+  const view = (o) => ({ id: o.id, state: o.state, kes: o.kes, sats: o.sats, rate: Math.round(o.btcKes), invoice: o.state === "INVOICED" ? o.invoice : undefined, receipt: o.receipt || null, why: (o.state === "NEEDS_REVIEW" || o.lndState === "CANCELED") ? o.why : undefined, lndState: o.lndState || undefined });
 
   // ---- the loop: watch invoices, pay, chase silent payouts
   // One tick at a time. setInterval doesn't wait for an async tick, so a slow
@@ -98,11 +98,22 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
             await payout(o);
           } else if (inv.state === "CANCELED") save(o, { state: "EXPIRED" });
         } else if (o.state === "LOCKED") {
-          await payout(o); // crashed after LOCKED, before PAYING: paying now is safe, nothing was sent yet
-        } else if (o.state === "PAYING" && Date.now() - Date.parse(o.updatedAt) > statusAfterMs && !o.asked) {
-          o.asked = true;
-          await daraja.status({ originatorId: o.id });
-          log(`[${o.id.slice(0, 8)}] no result yet: asked M-Pesa for the payout's status`);
+          // Restarted after LOCKED, before PAYING: check the sats are still
+          // there before asking M-Pesa, LND may have cancelled meanwhile.
+          const inv = await lnd.lookup(o.hashHex);
+          if (inv.state === "CANCELED") save(o, { state: "EXPIRED", why: "LND cancelled the invoice before M-Pesa was asked; nothing was sent." });
+          else await payout(o); // paying now is safe, nothing was sent yet
+        } else if (o.state === "PAYING") {
+          const stale = Date.now() - Date.parse(o.updatedAt) > statusAfterMs && !o.asked;
+          const inv = await lnd.lookup(o.hashHex);
+          if (inv.state === "CANCELED" && o.lndState !== "CANCELED") {
+            save(o, { lndState: "CANCELED", why: "LND cancelled the invoice while the M-Pesa payout is in flight." });
+          }
+          if (stale) {
+            o.asked = true;
+            await daraja.status({ originatorId: o.id });
+            log(`[${o.id.slice(0, 8)}] no result yet: asked M-Pesa for the payout's status`);
+          }
         }
       } catch (e) { log(`[${o.id.slice(0, 8)}] ${e.message}`); }
     }
