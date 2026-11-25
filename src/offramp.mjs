@@ -149,7 +149,17 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
       save(o, { state: "PAID", receipt: r.receipt });
       if (r.utilityFunds === undefined) saveFloat(float - o.kes);
     } else if (r.final) {
-      await lnd.cancel(o.hashHex);
+      try {
+        await lnd.cancel(o.hashHex);
+      } catch (e) {
+        const inv = await lnd.lookup(o.hashHex).catch(() => null);
+        if (inv?.state === "CANCELED") {
+          save(o, { state: "REFUNDED", why: `${r.code} ${r.desc} (invoice already cancelled)` });
+          return;
+        }
+        save(o, { state: "NEEDS_REVIEW", why: `M-Pesa refused (${r.code} ${r.desc}) but LND cancel failed: ${e.message}; sats may still be locked.` });
+        return;
+      }
       save(o, { state: "REFUNDED", why: `${r.code} ${r.desc}` });
     } else {
       o.asked = false; // not final yet (e.g. still processing): ask again later

@@ -184,6 +184,52 @@ test("LND cancel while PAYING is recorded without a second payout", async () => 
   assert.equal(o.state, "NEEDS_REVIEW"); // the late success resolves against the recorded cancel
 });
 
+test("refund when LND already cancelled: still refunded, Safaricom acked", async () => {
+  const { off, lnd, cb } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  await lnd.cancel(o.hashHex); // LND expired the invoice first
+  lnd.cancel = async () => { throw new Error("LND 400: invoice already canceled"); }; // a racing cancel fails
+  const res = await fetch(`http://127.0.0.1:${cb}/daraja/result`, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ Result: { ResultCode: 1, ResultDesc: "The balance is insufficient for the transaction.", OriginatorConversationID: o.id } }) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ResultCode: 0, ResultDesc: "Accepted" });
+  assert.equal(o.state, "REFUNDED"); // the sats are back with the customer either way
+});
+
+test("refund when LND cancel fails and sats still locked: parked for review, Safaricom acked", async () => {
+  const { off, lnd, cb } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  lnd.cancel = async () => { throw new Error("LND timeout"); }; // LND is down, sats still locked
+  const res = await fetch(`http://127.0.0.1:${cb}/daraja/result`, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ Result: { ResultCode: 1, ResultDesc: "The balance is insufficient for the transaction.", OriginatorConversationID: o.id } }) });
+  assert.equal(res.status, 200);
+  assert.equal(o.state, "NEEDS_REVIEW");
+  assert.match(o.why, /still be locked/);
+  assert.equal(lnd.inv.get(o.hashHex).state, "ACCEPTED"); // truthfully still locked, no KES moved
+});
+
+test("repeated callbacks are idempotent: one cancel, later results ignored", async () => {
+  const { off, lnd } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  let cancels = 0;
+  const realCancel = lnd.cancel;
+  lnd.cancel = async (h) => { cancels++; return realCancel(h); };
+  lnd.pay(o.hashHex); await off.tick();
+  const fail = { Result: { ResultCode: 1, ResultDesc: "The balance is insufficient for the transaction.", OriginatorConversationID: o.id } };
+  await off.onResult(fail);
+  await off.onResult(fail); // Safaricom retries the callback
+  assert.equal(o.state, "REFUNDED");
+  assert.equal(cancels, 1);
+  await off.onResult({ Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: o.id, TransactionID: "T999", ResultParameters: { ResultParameter: [] } } });
+  assert.equal(o.state, "REFUNDED"); // a late success after the refund changes nothing
+  assert.equal(lnd.inv.get(o.hashHex).state, "CANCELED");
+});
+
 test("status answers are read from inside ResultParameters", () => {
   const r = parseResult({ Result: { ResultCode: 0, OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
     { Key: "OriginatorConversationID", Value: "the-payout" }, { Key: "TransactionStatus", Value: "Completed" }, { Key: "ReceiptNo", Value: "R1" } ] } } });
