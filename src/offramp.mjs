@@ -52,7 +52,7 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
   const reserved = () => [...orders.values()].filter(open).reduce((s, o) => s + o.kes, 0);
   const paidToday = (phone) => {
     const day = new Date().toISOString().slice(0, 10);
-    return [...orders.values()].filter((o) => o.phone === phone && (open(o) || o.state === "PAID") && o.createdAt.startsWith(day))
+    return [...orders.values()].filter((o) => o.phone === phone && (open(o) || o.state === "PAID" || (o.state === "NEEDS_REVIEW" && o.receipt)) && o.createdAt.startsWith(day))
       .reduce((s, o) => s + o.kes, 0);
   };
 
