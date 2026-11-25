@@ -21,8 +21,8 @@ function fakeLnd() {
     inv,
     addHold: async ({ hashHex, sats }) => { inv.set(hashHex, { state: "OPEN", sats }); return { payment_request: "lnbcrt" + hashHex.slice(0, 10) }; },
     lookup: async (h) => inv.get(h),
-    settle: async (pre) => { const h = crypto.createHash("sha256").update(Buffer.from(pre, "hex")).digest("hex"); const i = inv.get(h); if (i.state === "CANCELED") throw new Error("LND 400: invoice canceled"); i.state = "SETTLED"; },
-    cancel: async (h) => { inv.get(h).state = "CANCELED"; },
+    settle: async (pre) => { const h = crypto.createHash("sha256").update(Buffer.from(pre, "hex")).digest("hex"); const i = inv.get(h); if (i.state !== "ACCEPTED") throw new Error(`LND 400: invoice ${i.state.toLowerCase()}`); i.state = "SETTLED"; },
+    cancel: async (h) => { const i = inv.get(h); if (i.state === "SETTLED") throw new Error("LND 400: invoice already settled"); i.state = "CANCELED"; },
     pay: (h) => { inv.get(h).state = "ACCEPTED"; }, // the customer's wallet pays
   };
 }
@@ -228,6 +228,40 @@ test("repeated callbacks are idempotent: one cancel, later results ignored", asy
     OriginatorConversationID: o.id, TransactionID: "T999", ResultParameters: { ResultParameter: [] } } });
   assert.equal(o.state, "REFUNDED"); // a late success after the refund changes nothing
   assert.equal(lnd.inv.get(o.hashHex).state, "CANCELED");
+});
+
+test("concurrent double success settles and applies once", async () => {
+  const { off, lnd } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  const s = { Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
+      { Key: "OriginatorConversationID", Value: o.id }, { Key: "TransactionStatus", Value: "Completed" },
+      { Key: "ReceiptNo", Value: "T555" } ] } } }; // status-shaped: no utilityFunds, float is decremented
+  const s2 = { Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: "the-other-query", ResultParameters: { ResultParameter: [
+      { Key: "OriginatorConversationID", Value: o.id }, { Key: "TransactionStatus", Value: "Completed" },
+      { Key: "ReceiptNo", Value: "" } ] } } }; // same payout, reported without its receipt
+  await Promise.all([off.onResult(s), off.onResult(s2)]); // result and status answer arrive together
+  assert.equal(o.state, "PAID");
+  assert.equal(o.receipt, "T555"); // the receipt-less duplicate clears nothing
+  assert.equal(off.float(), 18_500); // decremented exactly once
+  assert.equal(lnd.inv.get(o.hashHex).state, "SETTLED");
+});
+
+test("conflicting success and fail keeps the receipt and parks for review", async () => {
+  const { off, lnd } = await setup({ mode: "silent" });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 1500 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  const success = { Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: o.id, TransactionID: "T777",
+    ResultParameters: { ResultParameter: [
+      { Key: "TransactionAmount", Value: 1500 }, { Key: "TransactionReceipt", Value: "T777" },
+      { Key: "B2CUtilityAccountAvailableFunds", Value: 18500 } ] } } };
+  const fail = { Result: { ResultCode: 1, ResultDesc: "The balance is insufficient for the transaction.", OriginatorConversationID: o.id } };
+  await Promise.all([off.onResult(success), off.onResult(fail)]);
+  assert.equal(o.state, "NEEDS_REVIEW"); // M-Pesa contradicted itself: a human must reconcile
+  assert.equal(o.receipt, "T777");
 });
 
 test("status answers are read from inside ResultParameters", () => {

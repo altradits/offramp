@@ -136,31 +136,40 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
     const o = orders.get(r.originatorId);
     if (!o || !["PAYING", "LOCKED"].includes(o.state)) return; // unknown or already final: ignore repeats
     if (r.utilityFunds !== undefined) saveFloat(Number(r.utilityFunds));
+    // Two callbacks for one order can run concurrently (a result plus its
+    // status answer): re-check still-open after every LND await so only one applies.
+    const finalizePaid = () => {
+      if (!["PAYING", "LOCKED"].includes(o.state)) return;
+      save(o, { state: "PAID", receipt: r.receipt || o.receipt });
+      if (r.utilityFunds === undefined) saveFloat(float - o.kes);
+    };
+    const finalizeRefunded = (why) => {
+      if (!["PAYING", "LOCKED"].includes(o.state)) return;
+      save(o, { state: "REFUNDED", why });
+    };
     if (r.ok) {
       try {
         await lnd.settle(o.preimageHex);
       } catch (e) {
+        const inv = await lnd.lookup(o.hashHex).catch(() => null);
+        if (inv?.state === "SETTLED") { finalizePaid(); return; } // a racing callback settled it
         // The shillings left but the sats can't be claimed (LND cancelled the
         // invoice first): park the order where the operator can see it.
         if (r.utilityFunds === undefined) saveFloat(float - o.kes);
-        save(o, { state: "NEEDS_REVIEW", receipt: r.receipt, why: `M-Pesa paid but LND settle failed: ${e.message}` });
+        save(o, { state: "NEEDS_REVIEW", receipt: r.receipt || o.receipt, why: `M-Pesa paid but LND settle failed: ${e.message}` });
         return;
       }
-      save(o, { state: "PAID", receipt: r.receipt });
-      if (r.utilityFunds === undefined) saveFloat(float - o.kes);
+      finalizePaid();
     } else if (r.final) {
       try {
         await lnd.cancel(o.hashHex);
       } catch (e) {
         const inv = await lnd.lookup(o.hashHex).catch(() => null);
-        if (inv?.state === "CANCELED") {
-          save(o, { state: "REFUNDED", why: `${r.code} ${r.desc} (invoice already cancelled)` });
-          return;
-        }
-        save(o, { state: "NEEDS_REVIEW", why: `M-Pesa refused (${r.code} ${r.desc}) but LND cancel failed: ${e.message}; sats may still be locked.` });
+        if (inv?.state === "CANCELED") { finalizeRefunded(`${r.code} ${r.desc} (invoice already cancelled)`); return; }
+        save(o, { state: "NEEDS_REVIEW", receipt: r.receipt || o.receipt, why: `M-Pesa refused (${r.code} ${r.desc}) but LND cancel failed: ${e.message}; sats may still be locked.` });
         return;
       }
-      save(o, { state: "REFUNDED", why: `${r.code} ${r.desc}` });
+      finalizeRefunded(`${r.code} ${r.desc}`);
     } else {
       o.asked = false; // not final yet (e.g. still processing): ask again later
     }
