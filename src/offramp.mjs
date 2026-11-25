@@ -105,8 +105,11 @@ export function createOfframp({ lnd, daraja, rate, journalPath, feePct = 1, minK
           else await payout(o); // paying now is safe, nothing was sent yet
         } else if (o.state === "PAYING") {
           const stale = Date.now() - Date.parse(o.updatedAt) > statusAfterMs && !o.asked;
-          const inv = await lnd.lookup(o.hashHex);
-          if (inv.state === "CANCELED" && o.lndState !== "CANCELED") {
+          let inv = null;
+          try {
+            inv = await lnd.lookup(o.hashHex);
+          } catch (e) { log(`[${o.id.slice(0, 8)}] ${e.message}`); } // LND down must not skip a due status query
+          if (inv?.state === "CANCELED" && o.lndState !== "CANCELED") {
             save(o, { lndState: "CANCELED", why: "LND cancelled the invoice while the M-Pesa payout is in flight." });
           }
           if (stale) {
