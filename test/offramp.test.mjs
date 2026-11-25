@@ -264,6 +264,28 @@ test("conflicting success and fail keeps the receipt and parks for review", asyn
   assert.equal(o.receipt, "T777");
 });
 
+test("daily limit counts NEEDS_REVIEW outflows that moved shillings", async () => {
+  const { off, lnd } = await setup({ float: 200_000 });
+  const o = off.orders.get((await off.quote({ phone: "0712345678", kes: 50_000 })).id);
+  lnd.pay(o.hashHex); await off.tick();
+  await lnd.cancel(o.hashHex);
+  await off.onResult({ Result: { ResultCode: 0, ResultDesc: "The service request is processed successfully.",
+    OriginatorConversationID: o.id, TransactionID: "T60000",
+    ResultParameters: { ResultParameter: [
+      { Key: "TransactionAmount", Value: 50_000 }, { Key: "TransactionReceipt", Value: "T60000" },
+      { Key: "B2CUtilityAccountAvailableFunds", Value: 150_000 } ] } } });
+  assert.equal(o.state, "NEEDS_REVIEW");
+  await off.quote({ phone: "0712345678", kes: 50_000 }); // still open, counts too
+  await assert.rejects(off.quote({ phone: "0712345678", kes: 10 }), /Daily limit/);
+  const p2 = off.orders.get((await off.quote({ phone: "0722345678", kes: 50_000 })).id);
+  lnd.pay(p2.hashHex); await off.tick();
+  lnd.cancel = async () => { throw new Error("LND timeout"); };
+  await off.onResult({ Result: { ResultCode: 1, ResultDesc: "The balance is insufficient for the transaction.", OriginatorConversationID: p2.id } });
+  assert.equal(p2.state, "NEEDS_REVIEW");
+  assert.equal(p2.receipt, undefined); // no shillings moved
+  await off.quote({ phone: "0722345678", kes: 50_000 }); // so the limit ignores it
+});
+
 test("status answers are read from inside ResultParameters", () => {
   const r = parseResult({ Result: { ResultCode: 0, OriginatorConversationID: "the-query", ResultParameters: { ResultParameter: [
     { Key: "OriginatorConversationID", Value: "the-payout" }, { Key: "TransactionStatus", Value: "Completed" }, { Key: "ReceiptNo", Value: "R1" } ] } } });
